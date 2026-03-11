@@ -22,11 +22,16 @@ import shlex
 from typing import Any, List, Optional, Union
 from urllib.parse import urljoin
 
-import aiohttp
+import httpx
 
 from agentcube.exceptions import CommandExecutionError
 from agentcube.utils.async_http import create_async_session
 from agentcube.utils.log import get_logger
+
+# Extra seconds added to the HTTP read timeout on top of the PicoD command
+# timeout.  This gives PicoD time to finish and return its JSON response
+# before httpx gives up waiting.
+_TIMEOUT_BUFFER_SECONDS = 2.0
 
 
 def _write_bytes(path: str, data: bytes) -> None:
@@ -63,7 +68,7 @@ class AsyncCodeInterpreterDataPlaneClient:
             timeout: Default request timeout in seconds (default: 120).
             connect_timeout: Connection timeout in seconds (default: 5).
             connector_limit: Total simultaneous connections (default: 100).
-            connector_limit_per_host: Max connections per host (default: 10).
+            connector_limit_per_host: Max keepalive connections per host (default: 10).
         """
         self.session_id = session_id
         self.timeout = timeout
@@ -88,11 +93,11 @@ class AsyncCodeInterpreterDataPlaneClient:
         )
         self._http_session.headers.update({"x-agentcube-session-id": self.session_id})
 
-    def _make_timeout(self, read_timeout: Optional[float] = None) -> aiohttp.ClientTimeout:
-        """Build an aiohttp.ClientTimeout with the given read timeout."""
-        return aiohttp.ClientTimeout(
+    def _make_timeout(self, read_timeout: Optional[float] = None) -> httpx.Timeout:
+        """Build an httpx.Timeout with the given read timeout."""
+        return httpx.Timeout(
+            read_timeout if read_timeout is not None else self.timeout,
             connect=self.connect_timeout,
-            total=read_timeout if read_timeout is not None else self.timeout,
         )
 
     async def _request(
@@ -100,9 +105,9 @@ class AsyncCodeInterpreterDataPlaneClient:
         method: str,
         endpoint: str,
         body: Optional[bytes] = None,
-        timeout: Optional[aiohttp.ClientTimeout] = None,
+        timeout: Optional[httpx.Timeout] = None,
         **kwargs,
-    ) -> aiohttp.ClientResponse:
+    ) -> httpx.Response:
         """Make a request to the Data Plane via Router."""
         url = urljoin(self.base_url, endpoint)
         if timeout is None:
@@ -114,11 +119,10 @@ class AsyncCodeInterpreterDataPlaneClient:
 
         self.logger.debug(f"{method} {url}")
 
-        # Caller must use `async with` on the returned response context manager
         return await self._http_session.request(
             method=method,
             url=url,
-            data=body,
+            content=body,
             headers=extra_headers,
             timeout=timeout,
             **kwargs,
@@ -146,15 +150,17 @@ class AsyncCodeInterpreterDataPlaneClient:
         payload = {"command": cmd_list, "timeout": timeout_str}
         body = json.dumps(payload).encode("utf-8")
 
-        # Add a buffer so aiohttp doesn't time out before PicoD returns the JSON response
+        # Add a buffer so httpx doesn't time out before PicoD returns the JSON response
         read_timeout = (
-            timeout_value + 2.0 if isinstance(timeout_value, (int, float)) else timeout_value
+            timeout_value + _TIMEOUT_BUFFER_SECONDS
+            if isinstance(timeout_value, (int, float))
+            else timeout_value
         )
         t = self._make_timeout(read_timeout)
 
-        async with await self._request("POST", "api/execute", body=body, timeout=t) as resp:
-            resp.raise_for_status()
-            result = await resp.json()
+        resp = await self._request("POST", "api/execute", body=body, timeout=t)
+        resp.raise_for_status()
+        result = resp.json()
 
         if result["exit_code"] != 0:
             raise CommandExecutionError(
@@ -204,8 +210,8 @@ class AsyncCodeInterpreterDataPlaneClient:
         payload = {"path": remote_path, "content": content_b64, "mode": "0644"}
         body = json.dumps(payload).encode("utf-8")
 
-        async with await self._request("POST", "api/files", body=body) as resp:
-            resp.raise_for_status()
+        resp = await self._request("POST", "api/files", body=body)
+        resp.raise_for_status()
 
     async def upload_file(self, local_path: str, remote_path: str) -> None:
         """Upload a local file using multipart/form-data."""
@@ -216,24 +222,24 @@ class AsyncCodeInterpreterDataPlaneClient:
         self.logger.debug(f"Uploading file {local_path} to {remote_path}")
 
         with open(local_path, "rb") as f:
-            form = aiohttp.FormData()
-            form.add_field("file", f, filename=os.path.basename(local_path))
-            form.add_field("path", remote_path)
-            form.add_field("mode", "0644")
-
-            async with self._http_session.post(
+            resp = await self._http_session.post(
                 url,
-                data=form,
+                files={"file": (os.path.basename(local_path), f)},
+                data={"path": remote_path, "mode": "0644"},
                 timeout=self._make_timeout(),
-            ) as resp:
-                resp.raise_for_status()
+            )
+        resp.raise_for_status()
 
     async def download_file(self, remote_path: str, local_path: str) -> None:
         """Download a file."""
         clean_path = remote_path.lstrip("/")
-        async with await self._request("GET", f"api/files/{clean_path}") as resp:
+        async with self._http_session.stream(
+            "GET",
+            urljoin(self.base_url, f"api/files/{clean_path}"),
+            timeout=self._make_timeout(),
+        ) as resp:
             resp.raise_for_status()
-            content = await resp.content.read()
+            content = await resp.aread()
 
         if os.path.dirname(local_path):
             os.makedirs(os.path.dirname(local_path), exist_ok=True)
@@ -242,14 +248,13 @@ class AsyncCodeInterpreterDataPlaneClient:
 
     async def list_files(self, path: str = ".") -> Any:
         """List files in a directory."""
-        async with await self._request("GET", "api/files", params={"path": path}) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-        return data.get("files", [])
+        resp = await self._request("GET", "api/files", params={"path": path})
+        resp.raise_for_status()
+        return resp.json().get("files", [])
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""
-        await self._http_session.close()
+        await self._http_session.aclose()
 
     async def __aenter__(self) -> "AsyncCodeInterpreterDataPlaneClient":
         return self

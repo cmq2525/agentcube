@@ -15,7 +15,7 @@
 from typing import Any, Dict, Optional
 from urllib.parse import urljoin
 
-import aiohttp
+import httpx
 
 from agentcube.utils.async_http import create_async_session
 from agentcube.utils.log import get_logger
@@ -51,20 +51,20 @@ class AsyncAgentRuntimeDataPlaneClient:
             connector_limit_per_host=connector_limit_per_host,
         )
 
-    def _make_timeout(self, read_timeout: Optional[float] = None) -> aiohttp.ClientTimeout:
-        """Build an aiohttp.ClientTimeout with the given read timeout."""
-        return aiohttp.ClientTimeout(
+    def _make_timeout(self, read_timeout: Optional[float] = None) -> httpx.Timeout:
+        """Build an httpx.Timeout with the given read timeout."""
+        return httpx.Timeout(
+            read_timeout if read_timeout is not None else self.timeout,
             connect=self.connect_timeout,
-            total=read_timeout if read_timeout is not None else self.timeout,
         )
 
     async def bootstrap_session_id(self) -> str:
         """Send a GET to the base URL to obtain a session ID from the response header."""
-        async with self._http_session.get(
+        resp = await self._http_session.get(
             self.base_url, timeout=self._make_timeout()
-        ) as resp:
-            resp.raise_for_status()
-            session_id = resp.headers.get(self.SESSION_HEADER)
+        )
+        resp.raise_for_status()
+        session_id = resp.headers.get(self.SESSION_HEADER)
 
         if not session_id:
             raise ValueError(
@@ -77,13 +77,8 @@ class AsyncAgentRuntimeDataPlaneClient:
         session_id: str,
         payload: Dict[str, Any],
         timeout: Optional[float] = None,
-    ) -> aiohttp.ClientResponse:
-        """Invoke the agent runtime with a payload.
-
-        Note: The caller must ``await resp.json()`` or ``await resp.text()`` before
-        the response object is released.  Use ``async with`` on the return value, or
-        call this from within an ``async with`` block.
-        """
+    ) -> httpx.Response:
+        """Invoke the agent runtime with a payload."""
         headers = {
             self.SESSION_HEADER: session_id,
             "Content-Type": "application/json",
@@ -99,7 +94,7 @@ class AsyncAgentRuntimeDataPlaneClient:
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""
-        await self._http_session.close()
+        await self._http_session.aclose()
 
     async def __aenter__(self) -> "AsyncAgentRuntimeDataPlaneClient":
         return self

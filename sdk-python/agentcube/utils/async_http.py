@@ -14,24 +14,24 @@
 
 """Async HTTP session utilities for AgentCube SDK."""
 
-import aiohttp
+import httpx
 
 
 def create_async_session(
     connector_limit: int = 100,
     connector_limit_per_host: int = 10,
-) -> aiohttp.ClientSession:
-    """Create an aiohttp ClientSession with connection pooling.
+) -> httpx.AsyncClient:
+    """Create an httpx AsyncClient with connection pooling.
 
     Args:
         connector_limit: Total number of simultaneous connections (default: 100).
-        connector_limit_per_host: Max connections per host (default: 10).
+        connector_limit_per_host: Max keepalive connections per host (default: 10).
 
     Returns:
-        A configured aiohttp.ClientSession with a TCPConnector.
+        A configured httpx.AsyncClient with connection limits.
     """
-    connector = aiohttp.TCPConnector(
-        limit=connector_limit,
-        limit_per_host=connector_limit_per_host,
+    limits = httpx.Limits(
+        max_connections=connector_limit,
+        max_keepalive_connections=connector_limit_per_host,
     )
-    return aiohttp.ClientSession(connector=connector)
+    return httpx.AsyncClient(limits=limits)

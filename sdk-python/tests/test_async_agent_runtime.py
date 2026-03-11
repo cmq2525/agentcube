@@ -76,12 +76,10 @@ class TestAsyncAgentRuntimeClientInvoke(unittest.IsolatedAsyncioTestCase):
         mock_dp.bootstrap_session_id = AsyncMock(return_value="sess-789")
         mock_dp.logger = MagicMock()
 
-        # Build a mock response that supports `async with`
-        mock_resp = AsyncMock()
+        # httpx responses are fully loaded — json() and text are sync
+        mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(return_value={"ok": True})
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        mock_resp.json = MagicMock(return_value={"ok": True})
         mock_dp.invoke = AsyncMock(return_value=mock_resp)
 
         mock_dp_class.return_value = mock_dp
@@ -102,12 +100,10 @@ class TestAsyncAgentRuntimeClientInvoke(unittest.IsolatedAsyncioTestCase):
         mock_dp.bootstrap_session_id = AsyncMock(return_value="sess-999")
         mock_dp.logger = MagicMock()
 
-        mock_resp = AsyncMock()
+        mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
-        mock_resp.json = AsyncMock(side_effect=Exception("not json"))
-        mock_resp.text = AsyncMock(return_value="plain")
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
+        mock_resp.json = MagicMock(side_effect=ValueError("not json"))
+        mock_resp.text = "plain"
         mock_dp.invoke = AsyncMock(return_value=mock_resp)
 
         mock_dp_class.return_value = mock_dp
@@ -126,15 +122,13 @@ class TestAsyncAgentRuntimeDataPlaneClient(unittest.IsolatedAsyncioTestCase):
             AsyncAgentRuntimeDataPlaneClient,
         )
 
-        # Mock the aiohttp session and GET response
-        mock_resp = AsyncMock()
+        # httpx responses are fully loaded; no async context manager needed
+        mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.headers = {"x-agentcube-session-id": "abc"}
-        mock_resp.__aenter__ = AsyncMock(return_value=mock_resp)
-        mock_resp.__aexit__ = AsyncMock(return_value=False)
 
         mock_session = MagicMock()
-        mock_session.get = MagicMock(return_value=mock_resp)
+        mock_session.get = AsyncMock(return_value=mock_resp)
         mock_create.return_value = mock_session
 
         client = AsyncAgentRuntimeDataPlaneClient(
@@ -151,7 +145,7 @@ class TestAsyncAgentRuntimeDataPlaneClient(unittest.IsolatedAsyncioTestCase):
             AsyncAgentRuntimeDataPlaneClient,
         )
 
-        mock_resp = AsyncMock()
+        mock_resp = MagicMock()
         mock_session = MagicMock()
         mock_session.post = AsyncMock(return_value=mock_resp)
         mock_create.return_value = mock_session

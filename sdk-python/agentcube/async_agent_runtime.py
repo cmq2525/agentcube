@@ -16,8 +16,6 @@ import logging
 import os
 from typing import Any, Dict, Optional
 
-import aiohttp
-
 from agentcube.clients.async_agent_runtime_data_plane import AsyncAgentRuntimeDataPlaneClient
 from agentcube.utils.log import get_logger
 
@@ -113,15 +111,13 @@ class AsyncAgentRuntimeClient:
             payload=payload,
             timeout=timeout,
         )
-        async with resp:
-            resp.raise_for_status()
-            try:
-                # content_type=None disables strict content-type checking so
-                # JSON responses with non-standard content-type headers are
-                # still parsed correctly.
-                return await resp.json(content_type=None)
-            except Exception:
-                return await resp.text()
+        resp.raise_for_status()
+        try:
+            return resp.json()
+        except ValueError:
+            # httpx raises ValueError (json.JSONDecodeError subclass) when the
+            # response body is not valid JSON; fall back to returning raw text.
+            return resp.text
 
     async def close(self) -> None:
         """Close the underlying HTTP session."""

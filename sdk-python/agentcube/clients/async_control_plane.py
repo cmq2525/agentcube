@@ -15,7 +15,7 @@
 import os
 from typing import Any, Dict, Optional
 
-import aiohttp
+import httpx
 
 from agentcube.utils.async_http import create_async_session
 from agentcube.utils.log import get_logger
@@ -44,7 +44,7 @@ class AsyncControlPlaneClient:
             timeout: Default request timeout in seconds (default: 120).
             connect_timeout: Connection timeout in seconds (default: 5).
             connector_limit: Total simultaneous connections (default: 100).
-            connector_limit_per_host: Max connections per host (default: 10).
+            connector_limit_per_host: Max keepalive connections per host (default: 10).
         """
         self.base_url = workload_manager_url or os.getenv("WORKLOAD_MANAGER_URL")
         if not self.base_url:
@@ -56,10 +56,7 @@ class AsyncControlPlaneClient:
         token_path = "/var/run/secrets/kubernetes.io/serviceaccount/token"
         token = auth_token or read_token_from_file(token_path)
 
-        self.timeout = aiohttp.ClientTimeout(
-            total=timeout,
-            connect=connect_timeout,
-        )
+        self.timeout = httpx.Timeout(timeout, connect=connect_timeout)
         self.logger = get_logger(f"{__name__}.AsyncControlPlaneClient")
 
         headers: Dict[str, str] = {"Content-Type": "application/json"}
@@ -100,9 +97,9 @@ class AsyncControlPlaneClient:
         url = f"{self.base_url}/v1/code-interpreter"
         self.logger.debug(f"Creating session at {url} with payload: {payload}")
 
-        async with self.session.post(url, json=payload, timeout=self.timeout) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
+        resp = await self.session.post(url, json=payload, timeout=self.timeout)
+        resp.raise_for_status()
+        data = resp.json()
 
         if "sessionId" not in data or not data["sessionId"]:
             self.logger.error("Response JSON missing 'sessionId' in create_session response.")
@@ -123,18 +120,21 @@ class AsyncControlPlaneClient:
         self.logger.debug(f"Deleting session {session_id} at {url}")
 
         try:
-            async with self.session.delete(url, timeout=self.timeout) as resp:
-                if resp.status == 404:
-                    return True  # Already gone
-                resp.raise_for_status()
+            resp = await self.session.delete(url, timeout=self.timeout)
+            if resp.status_code == 404:
+                return True  # Already gone
+            resp.raise_for_status()
             return True
-        except aiohttp.ClientError as e:
+        except httpx.HTTPError as e:
+            # httpx.HTTPError is the base for both network errors (RequestError)
+            # and HTTP status errors (HTTPStatusError). We treat all of them as
+            # non-fatal so that callers can continue without a hard crash.
             self.logger.error(f"Failed to delete session {session_id}: {e}")
             return False
 
     async def close(self) -> None:
         """Close the underlying session and release connection pool resources."""
-        await self.session.close()
+        await self.session.aclose()
 
     async def __aenter__(self) -> "AsyncControlPlaneClient":
         return self
