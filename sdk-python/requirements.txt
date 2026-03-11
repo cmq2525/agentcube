@@ -1,3 +1,4 @@
 requests
 PyJWT>=2.0.0
 cryptography
+aiohttp>=3.9.0
