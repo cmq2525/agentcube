@@ -151,11 +151,12 @@ class CodeInterpreterDataPlaneClient:
 
         result = resp.json()
         if result["exit_code"] != 0:
-             raise CommandExecutionError(
-                 exit_code=result["exit_code"],
-                 stderr=result["stderr"],
-                 command=command
-             )
+            raise CommandExecutionError(
+                exit_code=result["exit_code"],
+                stdout=result.get("stdout", ""),
+                stderr=result.get("stderr", ""),
+                command=command
+            )
 
         return result["stdout"]
 
