@@ -18,11 +18,19 @@ class AgentCubeError(Exception):
 
 class CommandExecutionError(AgentCubeError):
     """Raised when a command execution fails (exit code != 0)"""
-    def __init__(self, exit_code, stderr, command=None):
+    def __init__(self, exit_code, stderr, stdout=None, command=None):
         self.exit_code = exit_code
         self.stderr = stderr
+        self.stdout = stdout
         self.command = command
-        super().__init__(f"Command failed (exit {exit_code}): {stderr}")
+
+        message = f"Command failed (exit {exit_code})"
+        if stdout:
+            message = f"{message}\nstdout:\n{stdout}"
+        if stderr:
+            message = f"{message}\nstderr:\n{stderr}"
+
+        super().__init__(message)
 
 class SessionError(AgentCubeError):
     """Raised when session creation or management fails"""

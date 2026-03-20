@@ -30,6 +30,7 @@ from unittest.mock import Mock, patch
 os.environ.setdefault("ROUTER_URL", "http://mock-router:8080")
 
 from agentcube.code_interpreter import CodeInterpreterClient
+from agentcube.exceptions import CommandExecutionError
 
 
 class TestCodeInterpreterClientInit(unittest.TestCase):
@@ -153,6 +154,38 @@ class TestResourceLeakPrevention(unittest.TestCase):
 
         # Session should be cleaned up
         mock_cp.delete_session.assert_called_once_with("leaked-session-999")
+
+
+class TestCodeInterpreterDataPlaneClient(unittest.TestCase):
+    """Test data plane command execution behavior."""
+
+    @patch('agentcube.clients.code_interpreter_data_plane.create_session')
+    def test_execute_command_preserves_stdout_in_execution_error(self, mock_create_session):
+        mock_session = Mock()
+        mock_response = Mock()
+        mock_response.raise_for_status.return_value = None
+        mock_response.json.return_value = {
+            "exit_code": 1,
+            "stdout": "Hello, World!\n",
+            "stderr": "ValueError: This is an error message.\n",
+        }
+        mock_session.request.return_value = mock_response
+        mock_create_session.return_value = mock_session
+
+        from agentcube.clients.code_interpreter_data_plane import CodeInterpreterDataPlaneClient
+
+        client = CodeInterpreterDataPlaneClient(
+            session_id="session-123",
+            base_url="http://router/invocations/",
+        )
+
+        with self.assertRaises(CommandExecutionError) as ctx:
+            client.execute_command(["python3", "script.py"])
+
+        self.assertEqual(ctx.exception.stdout, "Hello, World!\n")
+        self.assertEqual(ctx.exception.stderr, "ValueError: This is an error message.\n")
+        self.assertIn("stdout:\nHello, World!\n", str(ctx.exception))
+        self.assertIn("stderr:\nValueError: This is an error message.\n", str(ctx.exception))
 
 
 if __name__ == "__main__":
