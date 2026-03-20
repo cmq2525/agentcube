@@ -153,8 +153,8 @@ class CodeInterpreterDataPlaneClient:
         if result["exit_code"] != 0:
             raise CommandExecutionError(
                 exit_code=result["exit_code"],
-                stdout=result.get("stdout"),
-                stderr=result.get("stderr"),
+                stdout=result.get("stdout", ""),
+                stderr=result.get("stderr", ""),
                 command=command
             )
 
